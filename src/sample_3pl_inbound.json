@@ -1,0 +1,13 @@
+{
+  "TransactionID": "TXN-MEDTECH-2026-9901",
+  "DeliveryDocument": "80012948",
+  "MovementType": "101",
+  "Plant": "1000",
+  "StorageLocation": "0001",
+  "Material": "MED-ONCO-PUMP-V2",
+  "Quantity": 50,
+  "UnitOfMeasure": "PC",
+  "TrackingNumber": "DHL-EXP-4821",
+  "UnitPrice": "12500.00 EUR",
+  "RecipientName": "Central Clinical Pharmacy"
+}

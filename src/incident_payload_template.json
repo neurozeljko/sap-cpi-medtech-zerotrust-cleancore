@@ -1,0 +1,10 @@
+{
+  "IncidentType": "S4HANA_POSTING_FAILURE",
+  "Severity": "CRITICAL",
+  "ProcessFlow": "IF_EventMesh_to_S4HANA_CleanCore_Consumer",
+  "MPL_MessageID": "${header.SAP_MessageProcessingLogID}",
+  "CorrelationID": "${header.X-Correlation-ID}",
+  "Timestamp": "${date:now:yyyy-MM-dd'T'HH:mm:ss'Z'}",
+  "ErrorDetails": "${exception.message}",
+  "ActionRequired": "Inspect S/4HANA OData Material Document Service / Reprocess from DLQ"
+}
