@@ -1,116 +1,175 @@
-# Enterprise Integration Architecture: Zero-Trust Event-Driven 3PL Inventory Sync to SAP S/4HANA (Clean Core)
+# Enterprise MedTech Architecture: Zero-Trust 3PL Inventory Sync & Clean Core
 
-![SAP Integration Suite](https://img.shields.io/badge/SAP%20Integration%20Suite-Cloud%20Integration-0070F2?style=for-the-badge&logo=sap)
-![SAP S/4HANA](https://img.shields.io/badge/SAP%20S%2F4HANA-OData%20V4%20Clean%20Core-E35205?style=for-the-badge&logo=sap)
-![Security](https://img.shields.io/badge/Security-Zero--Trust%20SHA--256-2ea44f?style=for-the-badge)
-![Compliance](https://img.shields.io/badge/Compliance-GxP%20%7C%20GDPR%20Privacy--by--Design-blue?style=for-the-badge)
-![Architecture](https://img.shields.io/badge/Architecture-Event--Driven%20Decoupled-purple?style=for-the-badge)
+[![SAP Integration Suite](https://img.shields.io/badge/SAP%20Integration%20Suite-Cloud%20Integration-0a85ea?style=for-the-badge&logo=sap&logoColor=white)](https://www.sap.com)
+[![SAP S/4HANA](https://img.shields.io/badge/SAP%20S%2F4HANA-OData%20V4%20Atomic%20Batch-orange?style=for-the-badge&logo=sap&logoColor=white)](https://help.sap.com)
+[![Medical Device Compliance](https://img.shields.io/badge/Compliance-FDA%2021%20CFR%20Part%20820%20%7C%20ISO%2013485-darkgreen?style=for-the-badge)](https://www.fda.gov)
+[![Security Standard](https://img.shields.io/badge/Security-Zero--Trust%20%7C%20SHA--256%20HMAC-red?style=for-the-badge)](https://csrc.nist.gov)
+[![Clean Core](https://img.shields.io/badge/Clean%20Core-Extensibility%20First-success?style=for-the-badge&logo=sap&logoColor=white)](https://www.sap.com)
+
+---
 
 ## Executive Summary
 
-This enterprise integration project demonstrates an end-to-end, mission-critical B2B inventory synchronization pipeline between a Global Third-Party Logistics carrier (3PL – DHL Life Sciences) and **SAP S/4HANA Cloud / Private Edition**, implemented for the **MedTech & Biopharmaceutical** sector.
+Medical Device manufacturing and distribution requires absolute traceability under **FDA 21 CFR Part 820** and **ISO 13485:2016**. Third-party logistics (3PL) partners synchronizing consigned high-value surgical implants, diagnostic instruments, and sterile batches present severe security and audit vectors if direct database updates or unverified payloads enter SAP S/4HANA.
 
-The architecture enforces SAP's **Clean Core** paradigm and strict **GxP / EU Annex 11 / GDPR Privacy-by-Design** regulatory standards. By replacing monolithic synchronous point-to-point connections with a decoupled **Event-Driven Architecture (EDA)**, the system achieves zero downtime vulnerability, cryptographic audit immutability via **SHA-256 payload hashing**, in-flight commercial/PII data obfuscation, and persistent **idempotency controls** preventing dual-posting anomalies in clinical stock records.
+This architecture establishes an asynchronous, **Zero-Trust Decoupled Supply Chain Pipeline** using an Event-Driven Publisher/Consumer topology:
+1. **Cryptographic Ingestion & Pre-Flight Audit (Publisher):** Ingests 3PL physical inventory counts and adjustments via mutual TLS, verifying in-flight SHA-256 HMAC digital signatures in constant-time before payload parsing, then publishing validated events to SAP Advanced Event Mesh.
+2. **GS1 Unique Device Identification (UDI) Validation (Consumer):** Subscribes to inventory events and pre-validates GS1 Datamatrix components (GTIN, Lot Number, Expiration Date, Serial Number) in-memory using Groovy rule engines to prevent inventory corruption.
+3. **Atomic OData V4 Clean Core Postings:** Bundles multi-item physical inventory adjustments into transactional **OData V4 `$batch` ChangeSets**, eliminating partial postings and maintaining zero core modifications in S/4HANA.
+4. **Quarantine Dead-Letter Architecture:** Isolates unauthorized payloads, signature mismatches, or sterile barrier breaches into an encrypted WORM (Write Once, Read Many) Dead-Letter Queue (DLQ) with forensic provenance.
 
 ---
 
 ## Architecture Overview
 
-### High-Level Topology
+This decoupled Clean Core architecture is split into two specialized asynchronous runtime engines communicating via SAP Advanced Event Mesh:
 
-```plaintext
-[3PL Logistics Partner (DHL Life Sciences)]
-       │
-       │ HTTPS / REST (OData V2 / JSON Payload)
-       ▼
-[SAP Integration Suite (Cloud Integration Runtime)]
-  ├── iFlow 1: IF_Inbound_3PL_Event_Publisher (Producer)
-  │     ├── Channel: Inbound HTTPS (/medtech/3pl/inbound/v1)
-  │     ├── Security Engine: Groovy Zero-Trust & GDPR Scrubber
-  │     │     ├── PII & Commercial Data Masking ('***-**-4821', '***CONFIDENTIAL***')
-  │     │     ├── Cryptographic SHA-256 Hashing of TransactionID
-  │     │     └── MPL Audit Header Extraction (CorrelationID) & Payload Log Suppression
-  │     ├── Data Store: Idempotent Ledger (MedTech_Processed_Events - 30-Day Retention)
-  │     └── Channel: Outbound ProcessDirect (/medtech/inventory/consumer)
+### 1. Inbound 3PL Ingestion & Cryptographic Gatekeeper (Publisher)
+Validates mutual TLS, executes constant-time HMAC-SHA256 integrity audits, and dispatches sanitized events to the enterprise event broker.
+
+![MedTech 3PL Event Publisher](sap-cpi-medtech-3pl-publisher-architecture.png)
+
+### 2. Event Mesh to S/4HANA Clean Core Consumer
+Subscribes to inventory events, enforces GS1 UDI rules, and executes atomic OData V4 ChangeSet batch postings into S/4HANA without core modifications.
+
+![MedTech S/4HANA Clean Core Consumer](sap-cpi-medtech-cleancore-consumer-architecture.png)
+
+---
+
+## High-Level Topology
+
+```text
+[Global 3PL Logistics Partner (Consigned MedTech Inventory)]
   │
-  └── iFlow 2: IF_EventMesh_to_S4HANA_CleanCore_Consumer (Consumer)
-        ├── Channel: Inbound ProcessDirect (/medtech/inventory/consumer)
-        ├── Content-Based Routing Matrix:
-        │     ├── MovementType == '101' ──► Goods Receipt Routing
-        │     └── MovementType == '601' ──► Goods Issue / Dispatch Routing
-        ├── Outbound Clean Core Channel: OData V4 Adapter (Create / POST)
-        └── Exception Subprocess:
-              ├── Incident JSON Payload Constructor
-              ├── Dynamic MPL Message ID & Stack Trace Extraction
-              └── Dead Letter Routing & IT Ops Dispatch
-       │
-       │ Reverse Invoke Tunnel (TLS 1.3)
-       ▼
-[SAP Cloud Connector]
-  ├── Subaccount Binding & Resource Whitelisting
-  └── Principal Propagation Engine (Short-Lived X.509 Client Certificates)
-       │
-       │ HTTPS / OData V4 Service
-       ▼
-[SAP S/4HANA Enterprise Core (Clean Core Architecture)]
-  └── Service: /sap/opu/odata4/sap/api_materialdocument/srvd_a2x/sap/materialdocument/0001
-      (Standard Clean Core Material Document Posting - Goods Movement 101/601)
+  │ HTTPS POST (TLS 1.3 / In-Flight SHA-256 HMAC Signature)
+  │ Endpoint: /medtech/zerotrust/inventory/sync
+  ▼
+[IF_Inbound_3PL_Event_Publisher]
+  ├── 1. Context & Security Header Initialization (CM_Init_ZeroTrust_Context)
+  ├── 2. Cryptographic Gatekeeper (Verify_HMAC_Signature.groovy)
+  │      └─ [Signature Tampered / Invalid] ──► Security Breach Alert (HTTP 403) ──► End
+  ├── 3. Event Envelope Packaging (AMQP CloudEvents 1.0)
+  └── 4. Outbound Publish ──► [SAP Advanced Event Mesh / BTP Event Mesh]
+                                    │
+                                    │ Persistent Topic: medtech/inventory/adjustment/v1
+                                    ▼
+[IF_EventMesh_to_S4HANA_CleanCore_Consumer]
+  ├── 1. Event Ingestion & Message Header Enrichment
+  ├── 2. UDI Compliance & Serialization Gatekeeper (Validate_MedTech_UDI.groovy)
+  │      ├─ Enforces FDA UDI structure (GTIN-14, Lot, Expiration Date, Serial)
+  │      └─ Flags sterile barrier breaches or expired medical devices
+  ├── 3. Atomic OData V4 Payload Builder (Build_S4HANA_ODataV4_Batch.groovy)
+  │      └─ Assembles atomic OData V4 ChangeSet for Physical Inventory Document posting
+  ├── 4. Outbound Dispatch: HTTP Adapter (To S/4HANA Cloud OData V4 API)
+  └── 5. Exception Subprocess (Zero-Trust Forensic DLQ):
+         └─ Captures stack traces & dumps quarantined payloads to forensic audit store
 ```
 
 ---
 
 ## Technical Specifications
 
-| Architectural Component | Technical Implementation | Enterprise Justification & Governance |
+| Architectural Dimension | Legacy 3PL Point-to-Point Sync | MedTech Zero-Trust Pipeline (Clean Core) |
 | :--- | :--- | :--- |
-| **Inbound Ingestion** | HTTPS REST Endpoint (`/medtech/3pl/inbound/v1`) | Standardized B2B JSON ingestion layer; decoupled perimeter security. |
-| **Zero-Trust Engine** | Custom Groovy Script (`GDPR_ZeroTrust_Scrubber.groovy`) | Executes SHA-256 cryptographic hashing on payload IDs and dynamically obfuscates sensitive pricing/PII fields before log persistence. |
-| **Data Privacy & GxP** | Memory-Level Payload Scrubbing | Precludes sensitive pharma pricing and patient delivery data from leaking into Message Processing Logs (MPL). |
-| **Idempotency Control** | Data Store (`MedTech_Processed_Events`) | Prevents duplicate physical stock postings by validating SHA-256 hashes against an encrypted 30-day transactional registry. |
-| **Broker Abstraction** | ProcessDirect Virtual Pipeline | Decouples producer from consumer pipelines with zero serialization latency; fully prepared for SAP Event Mesh AMQP 1.0 transition. |
-| **Transactional Core** | OData V4 Adapter (`API_MATERIAL_DOCUMENT_SRV`) | Strictly abides by Clean Core guidelines; completely bypasses deprecated RFC/BAPI wrappers and custom ABAP Z-tables. |
-| **Hybrid Connectivity** | SAP Cloud Connector (TLS 1.3) | Secure reverse-invoke tunnel into private ERP subnets with zero public inbound firewall ports exposed. |
-| **Audit Traceability** | Principal Propagation (X.509) | Propagates genuine caller credentials from BTP Identity Authentication directly to SAP ERP transaction logs (`SY-UNAME`). |
-| **Fault Tolerance** | Automated Exception Subprocess | Intercepts ERP communication failures, extracts internal MPL Log IDs, and formats structured incident alerts for IT Operations. |
+| **Decoupling Pattern** | Synchronous, tightly-coupled point-to-point calls | Asynchronous Event-Driven Publisher/Consumer via Event Mesh |
+| **Authentication** | Shared static Basic Auth / API Keys | Mutual TLS (mTLS) + In-Flight SHA-256 HMAC Signatures |
+| **Integrity Assurance** | Post-processing ERP error logs | Pre-flight cryptographic message verification in memory |
+| **Traceability Standard** | Proprietary material numbers | Strict GS1-128 / FDA UDI format enforcement |
+| **ERP Mutation Pattern** | Invasive BAPI calls / Direct DB updates | Atomic OData V4 `$batch` ChangeSets (Clean Core) |
+| **Transaction Boundary** | Non-atomic partial line-item commits | All-or-nothing rollback semantics per consignment run |
+| **Regulatory Audit** | Manual CSV log reconciliation | Immutable FDA 21 CFR Part 11 compliant audit envelopes |
 
 ---
 
-## Security, Zero-Trust & Regulatory Compliance
+## In-Flight Verification & Atomic Batch Structure
 
-### 1. Cryptographic Pseudonymization & GDPR Scrubbing
-Pharma supply chains mandate strict adherence to patient privacy and trade secret governance. Upstream payloads contain confidential unit valuations and recipient facility records. The integrated Groovy engine sanitizes inbound messages in-flight:
-* **Identifier Hashing:** Generates an irreversible `SHA-256` digest of `TransactionID` or `DeliveryDocument`, propagated as `TransactionHash` and `X-Correlation-ID`.
-* **PII & Value Obfuscation:** Replaces commercial prices with `***CONFIDENTIAL***` and client identities with `***REDACTED***`.
-* **Tracking Truncation:** Retains solely the terminal 4 digits of parcel identifiers (e.g., `***-**-4821`).
-
-### 2. Idempotent Processing (Anti-Duplication Ledger)
-To prevent network retransmission anomalies from generating phantom warehouse receipts, each incoming transaction hash is recorded into an encrypted SAP CPI Data Store (`MedTech_Processed_Events`). Duplicate submissions within the 30-day retention window are intercepted and rejected prior to ERP commitment.
-
-### 3. Clean Core OData V4 Consumption
-Rather than relying on legacy IDoc structures (`DELVRY03`, `MBGMCR01`) or direct database modifications, all transactional operations target SAP S/4HANA's native OData V4 Material Document API:
+### 1. Inbound In-Flight Verification Headers
 ```http
-POST /sap/opu/odata4/sap/api_materialdocument/srvd_a2x/sap/materialdocument/0001/MaterialDocument HTTP/1.1
+POST /http/medtech/zerotrust/inventory/sync HTTP/1.1
+Host: integration-suite-eu10.it-cpi026-rt.cfapps.eu10-002.hana.ondemand.com
 Content-Type: application/json
+X-MedTech-Signature: a5f2b8417cd98e...c678ef4039
+X-3PL-Facility-ID: MED-LOG-BERLIN-04
+X-UDI-Compliance-Profile: FDA_CFR_820_ANNEX_11
+```
+
+### 2. S/4HANA Clean Core OData V4 Batch ChangeSet
+```http
+--batch_change_set_a891-44bf
+Content-Type: application/http
+Content-Transfer-Encoding: binary
+
+POST PhysicalInventoryDocumentItem HTTP/1.1
+Content-Type: application/json
+
+{
+  "FiscalYear": "2026",
+  "Plant": "1010",
+  "StorageLocation": "CLIN",
+  "Product": "SURG-STENT-BIO-09",
+  "Batch": "LOT-2026-X99",
+  "CountedQuantityInBaseUnit": 45.0,
+  "BaseUnit": "PCE",
+  "ZeroCountIsZero": false,
+  "PhysicalInventoryItemIsCounted": true
+}
+--batch_change_set_a891-44bf--
 ```
 
 ---
 
 ## Repository Structure
 
-```plaintext
-├── src/
-│   ├── GDPR_ZeroTrust_Scrubber.groovy       # Production Groovy script for Zero-Trust hashing & scrubbing
-│   ├── sample_3pl_inbound.json              # Canonical 3PL inbound shipment telemetry payload
-│   └── incident_payload_template.json       # Clean Core exception subprocess structured incident schema
-├── docs/
-│   └── architecture-overview.md             # Technical design specification & Clean Core compliance matrix
-└── README.md                                # Enterprise architectural documentation
+```text
+├── README.md                                             # Enterprise architecture & operations runbook
+├── sap-cpi-medtech-3pl-publisher-architecture.png       # Publisher integration flow runtime topology
+├── sap-cpi-medtech-cleancore-consumer-architecture.png  # Consumer integration flow runtime topology
+├── ADR-004-Zero-Trust-HMAC-And-Clean-Core-Batching.md    # Architecture Decision Record
+├── IF_Inbound_3PL_Event_Publisher.zip                    # Publisher iFlow bundle export
+├── IF_EventMesh_to_S4HANA_CleanCore_Consumer.zip         # Consumer iFlow bundle export
+├── cpi/
+│   └── scripts/
+│       ├── Verify_HMAC_Signature.groovy                  # Constant-time SHA-256 HMAC verifier
+│       ├── Validate_MedTech_UDI.groovy                   # GS1 UDI & sterile expiration inspector
+│       ├── Build_S4HANA_ODataV4_Batch.groovy             # Atomic OData V4 ChangeSet assembler
+│       └── Format_ZeroTrust_Forensic_DLQ.groovy          # Forensic tamper incident formatter
+├── tests/
+│   ├── sample_valid_medtech_inventory.json               # Compliant signed 3PL adjustment payload
+│   └── sample_tampered_payload.json                      # Signature mismatch trigger test
+└── .gitignore                                            # Git exclusion rules
 ```
+
+---
+
+## Verification & Deployment Runbook
+
+### 1. Inbound Endpoint Verification
+Verify runtime status in **Monitor** ──► **Manage Integration Content**:
+```text
+https://<tenant-runtime>.cfapps.<region>[.hana.ondemand.com/http/medtech/zerotrust/inventory/sync](https://.hana.ondemand.com/http/medtech/zerotrust/inventory/sync)
+```
+
+### 2. Dispatched cURL Test (Security Happy Path)
+Execute an authorized POST request using valid 3PL inventory adjustments and cryptographic headers:
+
+```bash
+curl -X POST \
+  'https://<tenant-runtime>.cfapps.<region>[.hana.ondemand.com/http/medtech/zerotrust/inventory/sync](https://.hana.ondemand.com/http/medtech/zerotrust/inventory/sync)' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <BTP_OAUTH_TOKEN>' \
+  -H 'X-MedTech-Signature: <COMPUTED_HMAC_SHA256>' \
+  --data-binary '@tests/sample_valid_medtech_inventory.json'
+```
+
+### 3. Monitoring Trace
+* Inspect execution in **Monitor Message Processing**.
+* Verify properties `Signature_Valid = true`, `UDI_Compliance_Status = PASSED`, and `ODataV4_ChangeSet_ID`.
+* Confirm HTTP 200 response contains the immutable transaction record and Event Mesh correlation token.
 
 ---
 
 ## Author
 
 **Željko Popov**  
-Integration Architect  
-*SAP Integration Suite Specialist | Cloud Architecture & Clean Core*
+*Integration Architect | SAP Integration Suite & Clean Core Specialist*  
+[GitHub Repositories](https://github.com/neurozeljko)
